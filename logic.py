@@ -29,7 +29,14 @@ class BaudrateType(BaseType, Enum):
     STANDARD = ("460800", 460800)
     LEGACY   = ("115200", 115200)
 
+
 def serial_port_enumerator(detailed: bool = False):
+    """
+    Gets a list of current serial ports
+    :param detailed: set to true if you want the actual port objects and not a string representation to be used in a combo box
+    :return: if detailed is set to false function returns a list[BaseType] objects which contain string information about a port
+             if detailed is set to true function returns a list[ListPortInfo] objects which are references to actual ports and will give a bit more information
+    """
     ports : list[ListPortInfo] = list_ports.comports()
     if detailed:
         return ports

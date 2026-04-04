@@ -67,6 +67,11 @@ class MainWindow(QMainWindow):
             "baudrate": None,
         }
 
+        self.default_settings = {
+            "offset" : 0x8000,
+            "baudrate": BaudrateType.FAST,
+        }
+
         self.main_container = QWidget()
 
         self.top_bar = self.make_top_bar()
@@ -146,9 +151,9 @@ class MainWindow(QMainWindow):
     def handle_refresh(self) -> None:
         """
         when user clicks the refresh button, this method will change the following things in the sidebar
-            1. refresh the COM ports data
-            2. Prepopulate the offset field to the default 0x8000 address
-            3. Prepopulate the baud rate field to the default 921600 rate
+            1. refresh the COM ports data in combobox
+            2. Prepopulate the baud rate field to the default 921600 rate in combobox
+            3. Prepopulate the offset field to the default 0x8000 address in spinbox
         """
         # refresh the ports list
         port_container = self.data_containers["port"]
@@ -157,6 +162,16 @@ class MainWindow(QMainWindow):
         for port in ports:
             insertable = BaseType(f"{port.device} - ({port.description})", port.device)
             port_container.dropdown.addItem(insertable.display_name,insertable)
+
+        # set baud rate to default
+        baud_container = self.data_containers["baudrate"]
+        baud_index = baud_container.dropdown.findData(self.default_settings["baudrate"])
+        if baud_index != -1:
+            baud_container.dropdown.setCurrentIndex(baud_index)
+
+        # set offset to 0x8000
+        offset_container = self.data_containers["offset"]
+        offset_container.spinbox.setValue(self.default_settings["offset"])
 
 
 
