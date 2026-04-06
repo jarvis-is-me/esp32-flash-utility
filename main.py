@@ -19,7 +19,7 @@ from qt_material import apply_stylesheet
 from serial.tools.list_ports_common import ListPortInfo
 
 from logic import BoardType, FilesystemType, BaudrateType, BaseType
-from logic import serial_port_enumerator
+from logic import serial_port_enumerator, get_partition_table
 
 
 class SideBarMiniContainers(QFrame):
@@ -91,6 +91,11 @@ class MainWindow(QMainWindow):
     def make_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setFixedHeight(60)
+        button = QPushButton("Read")
+        button.clicked.connect(self.handle_read_flash)
+        layout = QHBoxLayout()
+        layout.addWidget(button)
+        bar.setLayout(layout)
         return bar
 
     def make_sidebar(self) -> QFrame:
@@ -99,7 +104,7 @@ class MainWindow(QMainWindow):
         temp_layout = QHBoxLayout()
         heading = QLabel("Device configuration")
         button = QPushButton("Refresh")
-        button.pressed.connect(self.handle_refresh)
+        button.clicked.connect(self.handle_refresh)
         temp_layout.addWidget(heading)
         temp_layout.addWidget(button)
         temp.setLayout(temp_layout)
@@ -173,7 +178,8 @@ class MainWindow(QMainWindow):
         offset_container = self.data_containers["offset"]
         offset_container.spinbox.setValue(self.default_settings["offset"])
 
-
+    def handle_read_flash(self):
+        pass
 
 app = QApplication(sys.argv)
 window = MainWindow()
