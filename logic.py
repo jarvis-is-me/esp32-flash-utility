@@ -1,3 +1,4 @@
+import time
 from enum import Enum
 from dataclasses import dataclass
 from struct import unpack
@@ -15,6 +16,13 @@ from esptool.cmds import (
 )
 
 from esptool.targets import ESP32ROM
+
+import my_logger
+import sys
+
+import pprint
+
+sys.setswitchinterval(0.05)
 
 @dataclass(frozen=True)
 class BaseType:
@@ -190,6 +198,7 @@ def get_filesystem(config: ESPConfigType, partition_offset: int, fstype: Filesys
             esp = run_stub(esp)  # Run the stub loader (optional)
             attach_flash(esp)  # Attach the flash memory chip, required for flash operations
             esp.change_baud(config.baudrate.command_value) #upgrade speed from 115200 baud to faster one
+            time.sleep(0.1)
 
             # Fetch partition table and figure out filesystem offset
             table = get_partition_table(esp, partition_offset)
@@ -208,6 +217,7 @@ def get_filesystem(config: ESPConfigType, partition_offset: int, fstype: Filesys
             filesystem_raw_data = get_filesyste_raw_data(esp, fs_offset, fs_size)
             filesystem_raw_data = bytearray(filesystem_raw_data)
 
+            # Create filesystem object from the raw data
             fs = LittleFS(
                 context=UserContext(buffer=filesystem_raw_data),
                 block_size = 4096,
@@ -216,9 +226,17 @@ def get_filesystem(config: ESPConfigType, partition_offset: int, fstype: Filesys
                 prog_size=16,
             )
 
+            fs_dict = {}
             for root, dirs, files in fs.walk("."):
-                print(f"root {root} dirs {dirs} files {files}")
+                fs_dict[root] = {
+                    'folders': dirs,
+                    'files': [],
+                }
+                for f in files:
+                    fs_dict[root]['files'].append(f)
 
             reset_chip(esp, "hard-reset")  # Reset the board
+        return fs
 
-get_filesystem(ESPConfigType(BoardType.ESP32, BaudrateType.FAST, "COM5"), 0x8000, FilesystemType.LITTLEFS)
+
+#get_filesystem(ESPConfigType(BoardType.ESP32, BaudrateType.FAST, "COM5"), 0x8000, FilesystemType.LITTLEFS)
