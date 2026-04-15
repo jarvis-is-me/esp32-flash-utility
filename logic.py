@@ -1,4 +1,5 @@
 import time
+import multiprocessing
 from enum import Enum
 from dataclasses import dataclass
 from struct import unpack
@@ -17,12 +18,12 @@ from esptool.cmds import (
 
 from esptool.targets import ESP32ROM
 
+from serial import SerialException
+from esptool import FatalError
+from littlefs.errors import LittleFSError
+
 import my_logger
-import sys
 
-import pprint
-
-sys.setswitchinterval(0.05)
 
 @dataclass(frozen=True)
 class BaseType:
@@ -174,7 +175,7 @@ def get_filesyste_raw_data(esp: ESPLoader, offset: int, size: int) -> bytes:
     return raw_data
 
 
-def get_filesystem(config: ESPConfigType, partition_offset: int, fstype: FilesystemType, legacy: bool = True):
+def get_filesystem(queue: multiprocessing.Queue, config: ESPConfigType, partition_offset: int, fstype: FilesystemType, legacy: bool = True):
     """
     Function that can be called directly from GUI, it will fetch the full filesystem
     and return the filesystem to GUI to be shown. This function handles calling other
@@ -185,58 +186,74 @@ def get_filesystem(config: ESPConfigType, partition_offset: int, fstype: Filesys
     (should have been 0x83 but they flash it with 0x82, even though the underlying filesystem
     is 0x83. SEtting the legacy parameter to True means, read the filesystem data and interpret it
     as littleFS even if the filesystem label says SPIFFS)
-
+    :param queue: The multiprocessing queue to set to log output to
     :param config: Configuration of ESP32 to connect to
     :param partition_offset: The offset of partition table in memory
     :param fstype: The type of filesystem
     :param legacy: Set to True to force interpret the filesystem as littleFS (commonly required when the board is flashed with arduino framework)
     :return: probably a littleFS object, not sure yet
     """
-    if config.board == BoardType.ESP32:
-        with ESP32ROM(config.port) as esp:
-            esp.connect()  # Connect to the ESP chip, needed when ESP32ROM is instantiated directly
-            esp = run_stub(esp)  # Run the stub loader (optional)
-            attach_flash(esp)  # Attach the flash memory chip, required for flash operations
-            esp.change_baud(config.baudrate.command_value) #upgrade speed from 115200 baud to faster one
-            time.sleep(0.1)
+    my_logger.set_logger_queue(queue)
 
-            # Fetch partition table and figure out filesystem offset
-            table = get_partition_table(esp, partition_offset)
-            fs_offset = None
-            fs_size = None
-            for entry in table:
-                if entry.type == PartitionType.DATA:
-                    if entry.subtype != PartitionSubType.INVALID:
-                        if entry.subtype == fstype.as_subtype or ( (fstype == FilesystemType.LITTLEFS) and (entry.subtype == PartitionSubType.SPIFFS) and legacy):
-                            fs_offset = entry.offset
-                            fs_size = entry.size
-                            break
+    try:
+        if config.board == BoardType.ESP32:
+            with ESP32ROM(config.port) as esp:
+                esp.connect()  # Connect to the ESP chip, needed when ESP32ROM is instantiated directly
+                esp = run_stub(esp)  # Run the stub loader (optional)
+                attach_flash(esp)  # Attach the flash memory chip, required for flash operations
+                esp.change_baud(config.baudrate.command_value) #upgrade speed from 115200 baud to faster one
+                time.sleep(0.1)
 
-            assert fs_offset is not None and fs_size is not None
+                # Fetch partition table and figure out filesystem offset
+                table = get_partition_table(esp, partition_offset)
+                fs_offset = None
+                fs_size = None
+                for entry in table:
+                    if entry.type == PartitionType.DATA:
+                        if entry.subtype != PartitionSubType.INVALID:
+                            if entry.subtype == fstype.as_subtype or ( (fstype == FilesystemType.LITTLEFS) and (entry.subtype == PartitionSubType.SPIFFS) and legacy):
+                                fs_offset = entry.offset
+                                fs_size = entry.size
+                                break
 
-            filesystem_raw_data = get_filesyste_raw_data(esp, fs_offset, fs_size)
-            filesystem_raw_data = bytearray(filesystem_raw_data)
+                assert fs_offset is not None and fs_size is not None
 
-            # Create filesystem object from the raw data
-            fs = LittleFS(
-                context=UserContext(buffer=filesystem_raw_data),
-                block_size = 4096,
-                block_count = fs_size//4096,
-                read_size=16,
-                prog_size=16,
-            )
+                filesystem_raw_data = get_filesyste_raw_data(esp, fs_offset, fs_size)
+                filesystem_raw_data = bytearray(filesystem_raw_data)
 
-            fs_dict = {}
-            for root, dirs, files in fs.walk("."):
-                fs_dict[root] = {
-                    'folders': dirs,
-                    'files': [],
+                reset_chip(esp, "hard-reset")  # Reset the board
+
+            queue.put(
+                {
+                    'type':'FINISHED',
+                    'payload': (filesystem_raw_data,fs_size)
                 }
-                for f in files:
-                    fs_dict[root]['files'].append(f)
+            )
+    except SerialException as e:
+        queue.put({
+            'type': 'ERROR',
+            'error': f"Serial Error: {str(e)}. Check your connection and COM port."
+        })
 
-            reset_chip(esp, "hard-reset")  # Reset the board
-        return fs
+    except FatalError as e:
+        queue.put({
+            'type': 'ERROR',
+            'error': f"esptool Error: {str(e)}"
+        })
+
+
+    except (AssertionError, LittleFSError, ValueError) as e:
+        queue.put({
+            'type': 'ERROR',
+            'error': f"Filesystem Error: {str(e)}. Are the partition offset and type correct?"
+        })
+
+
+    except Exception as e:
+        queue.put({
+            'type': 'ERROR',
+            'error': f"Unexpected Internal Error: {str(e)}",
+        })
 
 
 #get_filesystem(ESPConfigType(BoardType.ESP32, BaudrateType.FAST, "COM5"), 0x8000, FilesystemType.LITTLEFS)
