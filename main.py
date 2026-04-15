@@ -1,4 +1,6 @@
 import sys
+import queue
+import multiprocessing
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,7 +19,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPlainTextEdit
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from qt_material import apply_stylesheet
 
 from serial import SerialException
@@ -28,7 +30,7 @@ import logic
 from logic import BoardType, FilesystemType, BaudrateType, BaseType
 from logic import serial_port_enumerator
 
-from littlefs import LittleFS
+from littlefs import LittleFS, UserContext
 
 class SideBarMiniContainers(QFrame):
     def __init__(self, label_string: str, dropdown_selections: list[BaseType], is_hex: bool = False):
@@ -235,7 +237,23 @@ class MainWindow(QMainWindow):
         # This is the explorer widget we can reference
         self.explorer= None
 
+        # The progressbar at the bottom
         self.progress_bar = None
+
+        # These are used to communicate with any spawned esptool process
+        """
+        Format for the communicate queue - 
+        {
+            'type':'LOG'/'FINISHED'/'PROGRESS'/'ERROR',
+            'content' : "key for log messages",
+            'payload' : 'final result of the operation , like bytearray',
+            'value' : 'progress values , usually % in float or int'
+            'error' : 'cant connect to board'
+        }
+        """
+        self.communication_pipe = multiprocessing.Queue()
+        self.process = None
+        self.polling_timer = QTimer()
 
         self.main_container = QWidget()
         self.top_bar = self.make_top_bar()
@@ -349,13 +367,44 @@ class MainWindow(QMainWindow):
         offset_container = self.data_containers["offset"]
         offset_container.spinbox.setValue(self.default_settings["offset"])
 
+    def handle_read_flash_updates(self):
+        try:
+            data = self.communication_pipe.get(timeout=0.01)
+        except queue.Empty:
+            return
+
+        if data['type'] == 'PROGRESS':
+            self.progress_bar.setValue(data['value'])
+        elif data['type'] == 'FINISHED':
+            self.polling_timer.stop()
+            self.polling_timer.timeout.disconnect()
+            self.progress_bar.hide()
+            fs = LittleFS(
+                context=UserContext(buffer=data['payload'][0]),
+                block_size=4096,
+                block_count= data['payload'][1] // 4096,
+                read_size=16,
+                prog_size=16,
+            )
+            self.explorer.update_view(fs)
+            self.top_bar.setEnabled(True)
+        elif data['type'] == 'ERROR':
+            self.polling_timer.stop()
+            self.polling_timer.timeout.disconnect()
+            self.progress_bar.hide()
+            self.explorer.show_error_page(data['error'])
+            self.top_bar.setEnabled(True)
+        elif data['type'] == 'LOG':
+            print(data['content'])
+
+
     def handle_read_flash(self):
         """
         Reads and displays the filesystem information
         :return: None
         """
         self.top_bar.setDisabled(True)
-
+        self.progress_bar.show()
         try:
             port = self.data_containers["port"].dropdown.currentData().command_value
             board = self.data_containers["board"].dropdown.currentData()
@@ -366,24 +415,22 @@ class MainWindow(QMainWindow):
             filesystem = self.data_containers["fstype"].dropdown.currentData()
             offset = self.data_containers["offset"].spinbox.value()
 
-            fs = logic.get_filesystem(config, offset, filesystem)
-            self.explorer.update_view(fs)
-
         except (AttributeError, ValueError) as e:
             self.explorer.show_error_page(f"Configuration Error - Make sure you have selected correct port and board configuartion")
-        except SerialException:
-            self.explorer.show_error_page(f"Serial Error - could not open the port {port}.\n Make sure the port is not being used by any other process like serial monitor.")
-        except FatalError as e:
-            self.explorer.show_error_page(f"Esptool error - {e}")
-        except LittleFSError as e:
-            self.explorer.show_error_page(f"LittleFS error - {e}")
-        finally:
+            self.progress_bar.hide()
             self.top_bar.setEnabled(True)
+            return
 
-app = QApplication(sys.argv)
-window = MainWindow()
+        self.process = multiprocessing.Process(target=logic.get_filesystem, args=(self.communication_pipe ,config, offset, filesystem))
+        self.process.start()
+        self.polling_timer.start(100)
+        self.polling_timer.timeout.connect(self.handle_read_flash_updates)
 
-apply_stylesheet(app, theme='dark_purple.xml')
 
-window.show()
-app.exec()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    apply_stylesheet(app, theme='dark_purple.xml')
+    window.show()
+    sys.exit(app.exec())
