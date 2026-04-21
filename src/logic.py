@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from struct import unpack
 
 from esptool import ESPLoader
-from littlefs import LittleFS, UserContext
 from serial.tools import list_ports
 from serial.tools.list_ports_common import ListPortInfo
 
