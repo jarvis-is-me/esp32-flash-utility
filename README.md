@@ -21,7 +21,7 @@ This pyside + esptool based tool is supposed to be a way to communicate with Esp
 <img width="1283" height="755" alt="image" src="https://github.com/user-attachments/assets/7dd9ffe4-3cff-4d48-b46e-23eb9f8caf69" />
 
 #### Known drawbacks -
-  1. The user wont be able to preview image or binary files, only text based files such as .json , .txt , .html etc.
+  1. ~~The user wont be able to preview image or binary files, only text based files such as .json , .txt , .html etc.~~ The user can view image files. Binary files still not supported.
   2. ~~The user has no feedback in the GUI for the reading happening , the progress is logged in the terminal.~~ Progress is now shown as progress bar
   3. ~~The filesystem read happens on the main thread, so the UI is unrespnosive for the reading of filesystem (takes about 19 seconds to read a 1.5MB filesystem at 921600 baud rate on my machine)~~ Moved into a fully seperate process
   4. The UI , appearance wise looks like it might give someone migraine. Currently, my focus is mainly on getting the app functionality to work. However, styling will come soon as well.  
@@ -30,6 +30,6 @@ This pyside + esptool based tool is supposed to be a way to communicate with Esp
 #### Things coming in immediate next version -
   1. ~~Running the reading of flash on seperate thread and keeping the UI responsive~~ DONE
   2. ~~Having a progress bar to show much % is done.~~ DONE
-  3. Ability to preview image files and potentially binary files
+  3. ~~Ability to preview image files and potentially binary files~~ DONE
   4. Refining the error handling and providing better error messages to the user.
-  5. Ability to load a filesystem from existing .bin file. 
+  5. ~~Ability to load a filesystem from existing .bin file.~~ DONE
