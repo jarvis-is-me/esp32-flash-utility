@@ -1,5 +1,8 @@
+from enum import Enum, IntEnum
+
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QStackedWidget, QPlainTextEdit, QPushButton, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QSpinBox, QComboBox, QLabel
+from PySide6.QtGui import QPixmap, QImageReader
+from PySide6.QtWidgets import QFrame, QStackedWidget, QPlainTextEdit, QPushButton, QVBoxLayout, QTreeWidget, QTreeWidgetItem, QSpinBox, QComboBox, QLabel, QScrollArea
 
 from littlefs import LittleFS
 
@@ -43,8 +46,8 @@ class TextView(QFrame):
         self.back_button.clicked.connect(back_button_callback)
 
         layout = QVBoxLayout()
-        layout.addWidget(self.back_button)
         layout.addWidget(self.preview)
+        layout.addWidget(self.back_button)
 
         self.setLayout(layout)
 
@@ -69,36 +72,54 @@ class ErrorPage(QFrame):
 
         self.setLayout(layout)
 
+    def show_error(self, error_message):
+        self.label.setText(error_message)
+
 class FileExplorer(QStackedWidget):
     """
     Class that combines the tree view of filesystem as well as
     the page that shows the actual file text and manages the switching between them
     """
+    class Index(IntEnum):
+        ERROR = 0
+        BLANK = 1
+        TREE = 2
+        TEXT_VIEW = 3
+        IMAGE_VIEW = 4
+        # Any new view will be appended
+
+
     def __init__(self, fs: LittleFS|None):
         super().__init__()
         self.fs = fs
 
+        # Error page to show any errors during filesystem navigation
+        self.error_page = ErrorPage(self.handle_back_button)
+        self.addWidget(self.error_page) # Error page at index 0
+
+        # Make a default page to be shown at the start of the app
+        self.blank = QLabel("""
+                No file system read yet.\n Configure the board settings in the sidebar and press Read to read the flash and show the filesystem.\n Or upload an existing file system 
+                """)
+        self.blank.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.addWidget(self.blank)  # add a blank page at index 1
+
         # Make a tree to view the whole filesyste
         self.tree = QTreeWidget()
-        self.addWidget(self.tree) # add tree at index 0
+        self.addWidget(self.tree) # add tree at index 2
         self.tree.setHeaderLabels(["Name", "Size"])
-
         self.populate_tree()
         self.tree.itemDoubleClicked.connect(self.handle_file_show)
 
         # Make a page to view the contents of a clicked file
-        self.file_viewer = TextView(self.handle_back_button)
-        self.addWidget(self.file_viewer) # add file viewer at index 1
+        self.text_viewer = TextView(self.handle_back_button)
+        self.addWidget(self.text_viewer) # add file viewer at index 3
 
-        # Make a default page to be shown at the start of the app
-        self.blank = QLabel("""
-        No file system read yet.\n Configure the board settings in the sidebar and press Read to read the flash and show the filesystem 
-        """)
-        self.blank.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.addWidget(self.blank) # add a blank page at index 2
+        self.image_viewer = ImageViewer(self.handle_back_button)
+        self.addWidget(self.image_viewer) # Add image viewer at index 4
 
-        self.error_page = ErrorPage(self.handle_back_button)
-        self.addWidget(self.error_page) # add an error page at index 3
+        self.setCurrentIndex(FileExplorer.Index.BLANK)
+
 
     def populate_tree(self):
         """
@@ -113,7 +134,6 @@ class FileExplorer(QStackedWidget):
             # we go inside any folder on the next iterations)
             ref_dict = {}
             for root, dirs, files in self.fs.walk("."):
-
                 if root == ".":
                     parent_widget = self.tree
                 else:
@@ -136,10 +156,10 @@ class FileExplorer(QStackedWidget):
                     # data format ( dir/file , absolute path to dir/file)
                     item.setData(0, Qt.ItemDataRole.UserRole, ('file', full_path))
             self.tree.expandAll()
-            self.setCurrentIndex(0) # shows tree view
+            self.tree.resizeColumnToContents(0)
+            self.setCurrentIndex(FileExplorer.Index.TREE) # shows tree view
         else:
-            self.setCurrentIndex(2) # shows blank page
-
+            self.setCurrentIndex(FileExplorer.Index.BLANK) # shows blank page
 
     def handle_file_show(self, widget_item, index):
         """
@@ -154,17 +174,32 @@ class FileExplorer(QStackedWidget):
         else:
             print(f"file {full_path} was clicked")
 
-            # Read the file and switch to the file text view
-            with self.fs.open(full_path, 'r') as f:
-                self.file_viewer.preview.setPlainText(f.read())
-            self.setCurrentIndex(1)
+            supported_formats = [ bytes(f.data()).decode().lower() for f in QImageReader.supportedImageFormats() ]
+            file_format = full_path.split(".")[-1]
+
+            if file_format in supported_formats:
+                # File is an image, show it as image
+                with self.fs.open(full_path, 'rb') as f:
+                    try:
+                        self.image_viewer.set_image(f.read())
+                        self.setCurrentIndex(FileExplorer.Index.IMAGE_VIEW)
+                    except InvalidImage:
+                        self.show_error_page(f"Image format .{file_format} is not supported.")
+            else:
+                # Read the file and switch to the file text view
+                with self.fs.open(full_path, 'r') as f:
+                    self.text_viewer.preview.setPlainText(f.read())
+                self.setCurrentIndex(FileExplorer.Index.TEXT_VIEW)
 
     def handle_back_button(self):
         """
         callback function that switches from individual file view back to tree view of all files
         :return: None
         """
-        self.setCurrentIndex(0)
+        if self.fs is None:
+            self.setCurrentIndex(FileExplorer.Index.BLANK)
+        else:
+            self.setCurrentIndex(FileExplorer.Index.TREE)
 
     def update_view(self, fs):
         """
@@ -183,5 +218,38 @@ class FileExplorer(QStackedWidget):
         :param error_message: user friendly string stating what went wrong
         :return: None
         """
-        self.error_page.label.setText(error_message)
-        self.setCurrentIndex(3)
+        self.error_page.show_error(error_message)
+        self.setCurrentIndex(FileExplorer.Index.ERROR)
+
+class InvalidImage(Exception):
+    pass
+
+class ImageViewer(QFrame):
+
+    def __init__(self, back_button_callback):
+        super().__init__()
+        self.scrollarea = QScrollArea()
+
+        self.label = QLabel()
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.pixmap = QPixmap()
+
+        self.scrollarea.setWidget(self.label)
+        self.scrollarea.setWidgetResizable(True)
+
+        self.button = QPushButton("Back")
+        self.button.pressed.connect(back_button_callback)
+
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.scrollarea)
+        self.layout.addWidget(self.button)
+
+        self.setLayout(self.layout)
+
+    def set_image(self, image):
+        success = self.pixmap.loadFromData(image)
+        if not success:
+            raise InvalidImage()
+        self.label.setPixmap(self.pixmap)
+

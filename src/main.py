@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QFrame,
     QPushButton,
-    QLabel
+    QLabel,
+    QFileDialog
 )
 from PySide6.QtCore import Qt, QTimer
 from qt_material import apply_stylesheet
@@ -20,9 +21,9 @@ import logic
 from logic import BoardType, FilesystemType, BaudrateType, BaseType
 from logic import serial_port_enumerator
 
-from littlefs import LittleFS, UserContext
+from littlefs import LittleFS, UserContext, LittleFSError
 
-from widgets import SideBarMiniContainers, TextView, ErrorPage, FileExplorer
+from widgets import SideBarMiniContainers, FileExplorer
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -83,10 +84,16 @@ class MainWindow(QMainWindow):
     def make_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setFixedHeight(60)
-        button = QPushButton("Read")
-        button.clicked.connect(self.handle_read_flash)
+        button1 = QPushButton("Read from board")
+        button1.clicked.connect(self.handle_read_flash)
+
+        button2 = QPushButton("Read from .bin")
+        button2.clicked.connect(self.handle_read_bin)
+
         layout = QHBoxLayout()
-        layout.addWidget(button)
+        layout.addWidget(button1,20)
+        layout.addWidget(button2,80)
+
         bar.setLayout(layout)
         return bar
 
@@ -177,6 +184,17 @@ class MainWindow(QMainWindow):
         offset_container = self.data_containers["offset"]
         offset_container.spinbox.setValue(self.default_settings["offset"])
 
+    def create_and_show_filesystem(self, fsdata, fstype:logic.FilesystemType):
+        if fstype == logic.FilesystemType.LITTLEFS:
+            fs = LittleFS(
+                context=UserContext(buffer=fsdata[0]),
+                block_size=4096,
+                block_count=fsdata[1] // 4096,
+                read_size=16,
+                prog_size=16,
+            )
+            self.explorer.update_view(fs)
+
     def handle_read_flash_updates(self):
         try:
             data = self.communication_pipe.get(timeout=0.01)
@@ -189,15 +207,9 @@ class MainWindow(QMainWindow):
             self.polling_timer.stop()
             self.polling_timer.timeout.disconnect()
             self.progress_bar.hide()
-            fs = LittleFS(
-                context=UserContext(buffer=data['payload'][0]),
-                block_size=4096,
-                block_count= data['payload'][1] // 4096,
-                read_size=16,
-                prog_size=16,
-            )
-            self.explorer.update_view(fs)
+            self.create_and_show_filesystem(data['payload'], logic.FilesystemType.LITTLEFS)
             self.top_bar.setEnabled(True)
+            self.mid_section.setEnabled(True)
         elif data['type'] == 'ERROR':
             self.polling_timer.stop()
             self.polling_timer.timeout.disconnect()
@@ -205,6 +217,7 @@ class MainWindow(QMainWindow):
             self.progress_bar.hide()
             self.explorer.show_error_page(data['error'])
             self.top_bar.setEnabled(True)
+            self.mid_section.setEnabled(True)
         elif data['type'] == 'LOG':
             print(data['content'])
 
@@ -215,6 +228,7 @@ class MainWindow(QMainWindow):
         """
         self.top_bar.setDisabled(True)
         self.progress_bar.show()
+        self.mid_section.setDisabled(True)
         try:
             port = self.data_containers["port"].dropdown.currentData().command_value
             board = self.data_containers["board"].dropdown.currentData()
@@ -229,6 +243,7 @@ class MainWindow(QMainWindow):
             self.explorer.show_error_page(f"Configuration Error - Make sure you have selected correct port and board configuartion")
             self.progress_bar.hide()
             self.top_bar.setEnabled(True)
+            self.mid_section.setEnabled(True)
             return
 
         self.process = multiprocessing.Process(target=logic.get_filesystem, args=(self.communication_pipe , config, offset, filesystem))
@@ -236,7 +251,28 @@ class MainWindow(QMainWindow):
         self.polling_timer.start(100)
         self.polling_timer.timeout.connect(self.handle_read_flash_updates)
 
+    def handle_read_bin(self):
+        file, _ = QFileDialog.getOpenFileName(self, "Select the filesystem file", "", "Binary files (*.bin)")
+        if file:
+            print(f"User selected {file}")
+            try:
+                with open(file, "rb") as f:
+                    blob = f.read()
+                    data = (bytearray(blob), len(blob) )
+                    filesystem = self.data_containers["fstype"].dropdown.currentData()
+                    if filesystem is None:
+                        raise ValueError
+                    self.create_and_show_filesystem(data, filesystem)
 
+            except (FileNotFoundError, PermissionError) :
+                self.explorer.show_error_page("The file doesnt exist or lacks permissions to open")
+            except LittleFSError as e:
+                self.explorer.show_error_page(f"LittleFS error : {e}")
+            except (AttributeError, ValueError) as e:
+                self.explorer.show_error_page(f"Configuration Error - Make sure you have selected correct filesystem in menu")
+
+        else:
+            print("User didnt select anything")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

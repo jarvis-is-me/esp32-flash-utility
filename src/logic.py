@@ -39,6 +39,7 @@ class BoardType(BaseType, Enum):
 
 class BaudrateType(BaseType, Enum):
 #   Format : (Display Name, Command value)
+    ULTRA   = ("1500000", 1500000)
     FAST    = ("921600",  921600)
     STANDARD = ("460800", 460800)
     LEGACY   = ("115200", 115200)
@@ -246,7 +247,6 @@ def get_filesystem(queue: multiprocessing.Queue, config: ESPConfigType, partitio
             'type': 'ERROR',
             'error': f"Filesystem Error: {str(e)}. Are the partition offset and type correct?"
         })
-
 
     except Exception as e:
         queue.put({
